@@ -9,7 +9,6 @@ from typing import Dict, List,Any
 from pathlib import Path
 from langchain_core.documents import Document
 from langchain_text_splitters import MarkdownHeaderTextSplitter
-from sqlalchemy.testing.suite.test_reflection import metadata
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +40,7 @@ class DataPreparationModule:
             data_path: 数据文件夹路径
         """
         self.data_path = data_path
-        self.document: List[Document] = []
+        self.documents: List[Document] = []
         self.chunks: List[Document] = []
         self.parent_child_map: Dict[str,str] = {}
 
@@ -282,13 +281,13 @@ class DataPreparationModule:
             difficulty = doc.metadata.get('difficulty','未知')
             difficulties[difficulty] = difficulties.get(difficulty, 0) + 1
 
-            return {
-                'total_documents': len(self.documents),
-                'total_chunks': len(self.chunks),
-                'categories': categories,
-                'difficulties': difficulties,
-                'avg_chunk_size': sum(chunk.metadata.get('chunk_size', 0) for chunk in self.chunks) / len(self.chunks) if self.chunks else 0,
-            }
+        return {
+            'total_documents': len(self.documents),
+            'total_chunks': len(self.chunks),
+            'categories': categories,
+            'difficulties': difficulties,
+            'avg_chunk_size': sum(chunk.metadata.get('chunk_size', 0) for chunk in self.chunks) / len(self.chunks) if self.chunks else 0,
+        }
 
     def export_metadata(self, output_path: str):
         """
@@ -324,4 +323,42 @@ class DataPreparationModule:
         Returns:
             对应的父文档列表（去重，按相关性排序）
         """
+        #统计每个父文档被匹配的次数(相关性指标)
+        parent_relevance = {}
+        parent_docs_map = {}
 
+        #收集所有相关父文档ID和相关性分布
+        for chunk in child_chunks:
+            parent_id = chunk.metadata.get('parent_id')
+            if parent_id:
+                # 增加相关性计算
+                parent_relevance[parent_id] = parent_relevance.get(parent_id, 0) + 1
+
+                # 缓存父文档（避免重复查找）
+                if parent_id not in parent_docs_map:
+                    for doc in self.documents:
+                        if doc.metadata.get('parent_id') == parent_id:
+                            parent_docs_map[parent_id] = doc
+                            break
+
+        # 按相关性排序（匹配次数多的排在前面）
+        sorted_parent_ids = sorted(parent_relevance.keys(),
+                                   key=lambda x: parent_relevance[x],
+                                   reverse=True)
+
+        #构建去重后的父文档列表
+        parent_docs = []
+        for parent_id in sorted_parent_ids:
+            if parent_id in parent_docs_map:
+                parent_docs.append(parent_docs_map[parent_id])
+
+        # 收集父文档名称和相关性信息用于日志
+        parent_info = []
+        for doc in parent_docs:
+            dish_name = doc.metadata.get('dish_name','未知')
+            parent_id = doc.metadata.get('parent_id')
+            relevance_count = parent_relevance.get(parent_id, 0)
+            parent_info.append(f"{dish_name}({relevance_count}块)")
+
+        logger.info(f"从{len(parent_info)}个子块中找到{len(parent_docs)}个去重父文档：{','.join(parent_info)}")
+        return parent_docs
