@@ -5,48 +5,62 @@ import socket
 from typing import Any
 
 try:
+    from openai import OpenAI
+except ImportError:  # pragma: no cover - optional dependency
+    OpenAI = None
+
+try:
     from pymilvus import Collection, CollectionSchema, DataType, FieldSchema, connections, utility
 except ImportError:  # pragma: no cover - optional dependency
     Collection = CollectionSchema = DataType = FieldSchema = connections = utility = None
-
-try:
-    from sentence_transformers import SentenceTransformer
-except ImportError:  # pragma: no cover - optional dependency
-    SentenceTransformer = None
 
 logger = logging.getLogger(__name__)
 
 
 class MilvusIndexConstructionModule:
-    """Builds and searches a Milvus vector index for recipe chunks."""
+    """Builds and searches a Milvus vector index using an embedding API."""
 
-    def __init__(self, host: str, port: str, collection_name: str, model_name: str):
+    def __init__(
+        self,
+        host: str,
+        port: str,
+        collection_name: str,
+        model_name: str,
+        dimension: int,
+        api_key: str | None,
+        base_url: str | None = None,
+        batch_size: int = 64,
+    ):
         self.host = host
         self.port = port
         self.collection_name = collection_name
         self.model_name = model_name
-        self._model = None
+        self.dimension = dimension
+        self.api_key = api_key
+        self.base_url = base_url
+        self.batch_size = batch_size
+        self._client = None
         self._collection = None
 
     @property
     def is_available(self) -> bool:
-        if Collection is None or SentenceTransformer is None:
-            return False
-        if not self._can_connect_port():
+        if Collection is None or not self._can_embed() or not self._can_connect_port():
             return False
         try:
-            self.collection
-            return True
+            collection = self.collection
+            return self._collection_matches_dimension(collection)
         except Exception:
             return False
 
     @property
-    def model(self):
-        if SentenceTransformer is None:
-            raise RuntimeError("sentence-transformers package is not installed")
-        if self._model is None:
-            self._model = SentenceTransformer(self.model_name)
-        return self._model
+    def client(self):
+        if OpenAI is None:
+            raise RuntimeError("openai package is not installed")
+        if not self.api_key:
+            raise RuntimeError("Embedding API key is not configured")
+        if self._client is None:
+            self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        return self._client
 
     @property
     def collection(self):
@@ -61,14 +75,16 @@ class MilvusIndexConstructionModule:
         return self._collection
 
     def rebuild(self, chunks: list[dict[str, Any]]) -> int:
-        if not self.is_available:
+        if Collection is None or not self._can_embed() or not self._can_connect_port():
             return 0
+        connections.connect(alias="default", host=self.host, port=self.port)
         if utility.has_collection(self.collection_name):
             utility.drop_collection(self.collection_name)
             self._collection = None
         collection = self.collection
         if not chunks:
             return 0
+
         vectors = self.embed([chunk["text"] for chunk in chunks])
         collection.insert(
             [
@@ -91,14 +107,19 @@ class MilvusIndexConstructionModule:
     def search(self, query: str, limit: int = 8) -> list[dict[str, Any]]:
         if not self.is_available:
             return []
-        vector = self.embed([query])[0]
-        results = self.collection.search(
-            data=[vector],
-            anns_field="embedding",
-            param={"metric_type": "COSINE", "params": {"ef": 64}},
-            limit=limit,
-            output_fields=["recipe_id", "recipe_name", "category", "difficulty", "text"],
-        )
+        try:
+            vector = self.embed([query])[0]
+            results = self.collection.search(
+                data=[vector],
+                anns_field="embedding",
+                param={"metric_type": "COSINE", "params": {"ef": 64}},
+                limit=limit,
+                output_fields=["recipe_id", "recipe_name", "category", "difficulty", "text"],
+            )
+        except Exception as exc:
+            logger.warning("Milvus vector search failed, using fallback retrieval: %s", exc)
+            return []
+
         hits: list[dict[str, Any]] = []
         for hit in results[0]:
             entity = hit.entity
@@ -120,7 +141,33 @@ class MilvusIndexConstructionModule:
         return self.collection.num_entities
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        return self.model.encode(texts, normalize_embeddings=True).tolist()
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), self.batch_size):
+            batch = texts[start : start + self.batch_size]
+            vectors.extend(self._embed_batch(batch))
+        return vectors
+
+    def _embed_batch(self, texts: list[str]) -> list[list[float]]:
+        payload: dict[str, Any] = {"input": texts, "model": self.model_name}
+        if self.dimension:
+            payload["dimensions"] = self.dimension
+
+        try:
+            response = self.client.embeddings.create(**payload)
+        except Exception as exc:
+            if "dimension" not in str(exc).lower():
+                raise
+            payload.pop("dimensions", None)
+            response = self.client.embeddings.create(**payload)
+
+        vectors = [item.embedding for item in response.data]
+        for vector in vectors:
+            if len(vector) != self.dimension:
+                raise ValueError(
+                    f"Embedding dimension mismatch: expected {self.dimension}, got {len(vector)}. "
+                    "Update EMBEDDING_DIMENSION or choose a matching embedding model."
+                )
+        return vectors
 
     def _create_collection(self) -> None:
         schema = CollectionSchema(
@@ -134,7 +181,7 @@ class MilvusIndexConstructionModule:
                 FieldSchema(name="difficulty", dtype=DataType.VARCHAR, max_length=64),
                 FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=8192),
                 FieldSchema(name="metadata", dtype=DataType.VARCHAR, max_length=2048),
-                FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=512),
+                FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=self.dimension),
             ],
             description="Recipe chunks for What To Eat RAG",
         )
@@ -143,6 +190,15 @@ class MilvusIndexConstructionModule:
             "embedding",
             {"index_type": "HNSW", "metric_type": "COSINE", "params": {"M": 16, "efConstruction": 128}},
         )
+
+    def _collection_matches_dimension(self, collection) -> bool:
+        for field in collection.schema.fields:
+            if field.name == "embedding":
+                return int(field.params.get("dim", 0)) == self.dimension
+        return False
+
+    def _can_embed(self) -> bool:
+        return OpenAI is not None and bool(self.api_key)
 
     def _can_connect_port(self) -> bool:
         try:

@@ -4,7 +4,7 @@ pydantic>=2.8.0
 python-dotenv>=1.0.1
 neo4j>=5.22.0
 pymilvus>=2.4.6
-sentence-transformers>=3.0.0
+openai>=1.104.2,<3.0.0
 langchain==0.3.26
 langchain-community==0.3.27
 langchain-core>=0.3.0
