@@ -20,7 +20,6 @@ class Settings:
     app_name: str = "What To Eat API"
     api_prefix: str = "/api"
     data_path: Path = ROOT_DIR / "cook"
-    embedding_model: str = "BAAI/bge-small-zh-v1.5"
     llm_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     llm_temperature: float = float(os.getenv("OPENAI_TEMPERATURE", "0.7"))
     llm_max_tokens: int = int(os.getenv("OPENAI_MAX_TOKENS", "2048"))
@@ -37,6 +36,11 @@ class Settings:
 
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
     openai_base_url: str | None = os.getenv("OPENAI_BASE_URL") or None
+    embedding_api_key: str | None = os.getenv("EMBEDDING_API_KEY") or os.getenv("OPENAI_API_KEY")
+    embedding_base_url: str | None = os.getenv("EMBEDDING_BASE_URL") or os.getenv("OPENAI_BASE_URL") or None
+    embedding_model: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+    embedding_dimension: int = int(os.getenv("EMBEDDING_DIMENSION", "1536"))
+    embedding_batch_size: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "64"))
     cors_origins: tuple[str, ...] = tuple(
         origin.strip()
         for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")

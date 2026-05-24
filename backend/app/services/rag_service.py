@@ -26,6 +26,10 @@ class RagService:
             port=settings.milvus_port,
             collection_name=settings.milvus_collection,
             model_name=settings.embedding_model,
+            dimension=settings.embedding_dimension,
+            api_key=settings.embedding_api_key,
+            base_url=settings.embedding_base_url,
+            batch_size=settings.embedding_batch_size,
         )
         self.router = IntelligentQueryRouter()
         self.hybrid = HybridRetrievalModule(self.graph_data, self.milvus_index)
