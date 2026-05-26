@@ -73,9 +73,32 @@ export function StatusDashboard() {
         </section>
       ) : null}
 
+      {status?.degraded_services.length ? (
+        <section className="panel contentBlock">
+          <h2>降级说明</h2>
+          <div className="noticeList">
+            {status.degraded_services.map((message) => (
+              <p key={message}>{message}</p>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <section className="statusGrid">
         <StatusCard title="Neo4j" value={status?.neo4j ? "已连接" : "未连接，使用 Markdown 兜底"} />
         <StatusCard title="Milvus" value={status?.milvus ? "已连接" : "未连接，使用本地检索兜底"} />
+        <StatusCard
+          title="LLM"
+          value={status?.llm_configured ? status.llm_model ?? "已配置" : "未配置，使用模板回答兜底"}
+        />
+        <StatusCard
+          title="Embedding"
+          value={
+            status?.embedding_configured
+              ? `${status.embedding_model ?? "已配置"} / ${status.embedding_dimension ?? "-"} 维`
+              : "未配置，跳过向量索引"
+          }
+        />
         <StatusCard title="菜谱数量" value={loading ? "读取中" : String(status?.recipe_count ?? "-")} />
         <StatusCard title="文本块数量" value={loading ? "读取中" : String(status?.chunk_count ?? "-")} />
         <StatusCard title="最近重建" value={status?.last_build ? new Date(status.last_build).toLocaleString() : "暂无"} />

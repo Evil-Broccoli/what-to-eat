@@ -30,6 +30,12 @@ class IndexStatus(BaseModel):
     recipe_count: int
     chunk_count: int
     last_build: str | None = None
+    llm_configured: bool = False
+    llm_model: str | None = None
+    embedding_configured: bool = False
+    embedding_model: str | None = None
+    embedding_dimension: int | None = None
+    degraded_services: list[str] = Field(default_factory=list)
 
 
 class RebuildResponse(IndexStatus):

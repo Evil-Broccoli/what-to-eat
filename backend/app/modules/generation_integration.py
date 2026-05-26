@@ -35,6 +35,20 @@ class GenerationIntegrationModule:
         self._llm = None
 
     @property
+    def is_configured(self) -> bool:
+        return bool(self.api_key and self.model_name and ChatOpenAI is not None)
+
+    @property
+    def fallback_reason(self) -> str | None:
+        if ChatOpenAI is None:
+            return "langchain-openai 未安装，问答会使用检索结果模板兜底"
+        if not self.api_key:
+            return "LLM API Key 未配置，问答会使用检索结果模板兜底"
+        if not self.model_name:
+            return "LLM 模型名未配置，问答会使用检索结果模板兜底"
+        return None
+
+    @property
     def llm(self):
         if not self.api_key or ChatOpenAI is None:
             return None
