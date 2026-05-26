@@ -16,6 +16,8 @@ class Source(BaseModel):
     category: str = "其他"
     difficulty: str = "未知"
     score: float = 0
+    reason: str | None = None
+    matched_terms: list[str] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):

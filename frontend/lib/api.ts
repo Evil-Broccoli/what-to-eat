@@ -6,6 +6,8 @@ export type Source = {
   category: string;
   difficulty: string;
   score: number;
+  reason?: string | null;
+  matched_terms?: string[];
 };
 
 export type ChatResponse = {
