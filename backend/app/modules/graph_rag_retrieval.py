@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import re
-
 from app.modules.graph_data_preparation import GraphDataPreparationModule, RecipeRecord
+from app.modules.intelligent_query_router import IntelligentQueryRouter, QueryAnalysis
+from app.modules.retrieval_scoring import difficulty_levels, match_record, source_from_match
 from app.schemas.chat import Source
 
 
@@ -11,74 +11,101 @@ class GraphRAGRetrieval:
 
     def __init__(self, graph_data: GraphDataPreparationModule):
         self.graph_data = graph_data
+        self.router = IntelligentQueryRouter()
 
-    def search(self, query: str, limit: int = 5) -> tuple[list[RecipeRecord], list[Source]]:
+    def search(
+        self,
+        query: str,
+        limit: int = 5,
+        analysis: QueryAnalysis | None = None,
+    ) -> tuple[list[RecipeRecord], list[Source]]:
+        analysis = analysis or self.router.analyze(query)
         if self.graph_data.is_neo4j_available:
-            records = self._search_neo4j(query, limit)
+            records = self._search_neo4j(analysis, limit * 3)
         else:
-            records = self._search_local(query, limit)
-        sources = [
-            Source(
-                recipe_id=record.id,
-                recipe_name=record.name,
-                category=record.category,
-                difficulty=record.difficulty,
-                score=max(0.1, 1 - index * 0.1),
-            )
-            for index, record in enumerate(records)
-        ]
-        return records, sources
+            records = []
 
-    def _search_neo4j(self, query: str, limit: int) -> list[RecipeRecord]:
-        entities = self._entities(query)
-        if not entities:
-            return self._search_local(query, limit)
+        if len(records) < limit:
+            records = self._merge_records(records, self._search_local(analysis, limit * 3))
+
+        ranked: list[tuple[float, RecipeRecord, Source]] = []
+        for record in records:
+            match = match_record(record, analysis)
+            if not match:
+                continue
+            ranked.append((match.score, record, source_from_match(record, match)))
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        top = ranked[:limit]
+        return [record for _, record, _ in top], [source for _, _, source in top]
+
+    def _search_neo4j(self, analysis: QueryAnalysis, limit: int) -> list[RecipeRecord]:
         try:
             with self.graph_data.driver.session() as session:
                 rows = session.run(
                     """
-                    MATCH (r:Recipe)-[:HAS_INGREDIENT]->(i:Ingredient)
-                    WHERE any(entity IN $entities WHERE i.name CONTAINS entity OR r.name CONTAINS entity)
-                    RETURN DISTINCT r.id AS id
+                    MATCH (r:Recipe)
+                    OPTIONAL MATCH (r)-[:HAS_INGREDIENT]->(i:Ingredient)
+                    WITH r, collect(coalesce(i.name, "")) AS ingredient_names
+                    WHERE ($category IS NULL OR r.category = $category)
+                      AND ($difficulty_levels = [] OR r.difficulty IN $difficulty_levels)
+                      AND (
+                        $include_terms = []
+                        OR any(term IN $include_terms WHERE
+                          r.name CONTAINS term
+                          OR coalesce(r.description, "") CONTAINS term
+                          OR any(name IN ingredient_names WHERE name CONTAINS term)
+                        )
+                      )
+                      AND (
+                        $exclude_terms = []
+                        OR none(term IN $exclude_terms WHERE
+                          r.name CONTAINS term
+                          OR coalesce(r.description, "") CONTAINS term
+                          OR any(name IN ingredient_names WHERE name CONTAINS term)
+                        )
+                      )
+                    WITH r, ingredient_names,
+                      size([term IN $include_terms WHERE
+                        r.name CONTAINS term
+                        OR any(name IN ingredient_names WHERE name CONTAINS term)
+                      ]) AS include_hits,
+                      size([term IN $query_terms WHERE
+                        r.name CONTAINS term
+                        OR any(name IN ingredient_names WHERE name CONTAINS term)
+                      ]) AS query_hits
+                    RETURN r.id AS id, include_hits * 5 + query_hits * 2 AS graph_score
+                    ORDER BY graph_score DESC, r.name ASC
                     LIMIT $limit
                     """,
-                    entities=entities,
+                    category=analysis.category,
+                    difficulty_levels=list(difficulty_levels(analysis)),
+                    include_terms=list(analysis.include_terms),
+                    exclude_terms=list(analysis.exclude_terms),
+                    query_terms=list(analysis.query_terms),
                     limit=limit,
                 )
                 ids = [row["id"] for row in rows]
-            records = [self.graph_data.get_recipe(recipe_id) for recipe_id in ids]
-            return [record for record in records if record]
         except Exception:
-            return self._search_local(query, limit)
+            return []
 
-    def _search_local(self, query: str, limit: int) -> list[RecipeRecord]:
-        entities = self._entities(query)
-        avoid_spicy = any(word in query for word in ("不要辣", "不辣", "不能吃辣"))
-        easy_only = "简单" in query or "低难度" in query
-        scored: list[tuple[int, RecipeRecord]] = []
+        records = [self.graph_data.get_recipe(recipe_id) for recipe_id in ids]
+        return [record for record in records if record]
+
+    def _search_local(self, analysis: QueryAnalysis, limit: int) -> list[RecipeRecord]:
+        scored: list[tuple[float, RecipeRecord]] = []
         for record in self.graph_data.get_records():
-            text = " ".join(
-                [
-                    record.name,
-                    record.category,
-                    record.difficulty,
-                    record.description,
-                    " ".join(item.name for item in record.ingredients),
-                ]
-            )
-            if avoid_spicy and "辣" in text:
-                continue
-            if easy_only and record.difficulty not in ("非常简单", "简单", "未知"):
-                continue
-            score = sum(1 for entity in entities if entity in text)
-            if score or not entities:
-                scored.append((score, record))
-        scored.sort(key=lambda item: (item[0], item[1].category), reverse=True)
+            match = match_record(record, analysis)
+            if match:
+                scored.append((match.score, record))
+        scored.sort(key=lambda item: item[0], reverse=True)
         return [record for _, record in scored[:limit]]
 
-    def _entities(self, query: str) -> list[str]:
-        stopwords = {"我有", "能做什么", "推荐", "不要", "不能", "简单", "晚餐", "午餐", "早餐"}
-        cleaned = query
-        for word in stopwords:
-            cleaned = cleaned.replace(word, " ")
-        return [item for item in re.findall(r"[\u4e00-\u9fff]{1,4}", cleaned) if len(item) >= 1]
+    def _merge_records(self, first: list[RecipeRecord], second: list[RecipeRecord]) -> list[RecipeRecord]:
+        seen: set[str] = set()
+        result: list[RecipeRecord] = []
+        for record in first + second:
+            if record.id in seen:
+                continue
+            seen.add(record.id)
+            result.append(record)
+        return result

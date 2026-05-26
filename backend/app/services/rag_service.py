@@ -93,16 +93,16 @@ class RagService:
         analysis = self.router.analyze(query)
         try:
             if analysis.strategy == "graph_rag":
-                records, sources = self.graph_rag.search(query, limit=settings.top_k)
+                records, sources = self.graph_rag.search(query, limit=settings.top_k, analysis=analysis)
             elif analysis.strategy == "combined":
-                graph_records, graph_sources = self.graph_rag.search(query, limit=settings.top_k)
-                hybrid_records, hybrid_sources = self.hybrid.search(query, limit=settings.top_k)
-                records = self._dedupe_records(graph_records + hybrid_records)
-                sources = self._dedupe_sources(graph_sources + hybrid_sources)
+                _, graph_sources = self.graph_rag.search(query, limit=settings.top_k, analysis=analysis)
+                _, hybrid_sources = self.hybrid.search(query, limit=settings.top_k, analysis=analysis)
+                sources = self._dedupe_sources(graph_sources + hybrid_sources)[: settings.top_k]
+                records = self._records_from_sources(sources)
             else:
-                records, sources = self.hybrid.search(query, limit=settings.top_k)
+                records, sources = self.hybrid.search(query, limit=settings.top_k, analysis=analysis)
         except Exception:
-            records, sources = self.hybrid.search(query, limit=settings.top_k)
+            records, sources = self.hybrid.search(query, limit=settings.top_k, analysis=analysis)
             return records, sources, "hybrid"
 
         return records, sources, analysis.strategy
@@ -162,14 +162,13 @@ class RagService:
         return result
 
     def _dedupe_sources(self, sources):
-        seen = set()
-        result = []
+        by_id = {}
         for source in sources:
-            if source.recipe_id in seen:
+            existing = by_id.get(source.recipe_id)
+            if existing and existing.score >= source.score:
                 continue
-            seen.add(source.recipe_id)
-            result.append(source)
-        return result
+            by_id[source.recipe_id] = source
+        return sorted(by_id.values(), key=lambda item: item.score, reverse=True)
 
     def _degraded_services(self, neo4j_available: bool, milvus_available: bool) -> list[str]:
         messages: list[str] = []

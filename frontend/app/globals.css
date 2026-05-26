@@ -234,6 +234,20 @@ textarea {
   font-size: 16px;
 }
 
+.sourceReason {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.sourceTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
 .meta {
   display: flex;
   flex-wrap: wrap;

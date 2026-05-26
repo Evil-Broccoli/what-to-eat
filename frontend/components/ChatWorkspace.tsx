@@ -157,6 +157,16 @@ export function ChatWorkspace() {
                     <span>{source.category}</span>
                     <span>{source.difficulty}</span>
                   </div>
+                  {source.reason ? <p className="sourceReason">{source.reason}</p> : null}
+                  {source.matched_terms?.length ? (
+                    <div className="sourceTags" aria-label="匹配标签">
+                      {source.matched_terms.slice(0, 5).map((term) => (
+                        <span className="tag" key={term}>
+                          {term}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                 </Link>
               ))
             ) : (

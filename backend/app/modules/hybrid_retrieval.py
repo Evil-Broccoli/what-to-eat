@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-import math
-import re
 from collections import defaultdict
 
 from app.modules.graph_data_preparation import GraphDataPreparationModule, RecipeRecord
+from app.modules.intelligent_query_router import IntelligentQueryRouter, QueryAnalysis
 from app.modules.milvus_index_construction import MilvusIndexConstructionModule
+from app.modules.retrieval_scoring import match_record, source_from_match
 from app.schemas.chat import Source
 
 
 class HybridRetrievalModule:
-    """Milvus semantic retrieval plus local keyword/entity fallback."""
+    """Milvus semantic retrieval plus structured keyword/entity ranking."""
 
     def __init__(
         self,
@@ -19,116 +19,86 @@ class HybridRetrievalModule:
     ):
         self.graph_data = graph_data
         self.milvus_index = milvus_index
+        self.router = IntelligentQueryRouter()
 
-    def search(self, query: str, limit: int = 5) -> tuple[list[RecipeRecord], list[Source]]:
-        filters = self._query_filters(query)
-        vector_hits = self.milvus_index.search(query, limit=limit * 2)
-        keyword_hits = self._keyword_search(query, limit=limit * 2)
-        ranked_ids = self._rrf(vector_hits, keyword_hits)
+    def search(
+        self,
+        query: str,
+        limit: int = 5,
+        analysis: QueryAnalysis | None = None,
+    ) -> tuple[list[RecipeRecord], list[Source]]:
+        analysis = analysis or self.router.analyze(query)
+        vector_hits = self.milvus_index.search(query, limit=limit * 4)
+        keyword_hits = self._keyword_search(analysis, limit=limit * 4)
+        ranked_ids = self._rank(vector_hits, keyword_hits)
 
         records: list[RecipeRecord] = []
         sources: list[Source] = []
-        for recipe_id, score in ranked_ids[:limit]:
+        for recipe_id, score in ranked_ids:
             record = self.graph_data.get_recipe(recipe_id)
-            if not record:
+            if not record or any(item.id == record.id for item in records):
                 continue
-            if not self._matches_filters(record, filters):
+            match = match_record(record, analysis)
+            if not match:
                 continue
             records.append(record)
-            sources.append(
-                Source(
-                    recipe_id=record.id,
-                    recipe_name=record.name,
-                    category=record.category,
-                    difficulty=record.difficulty,
-                    score=score,
-                )
-            )
+            sources.append(source_from_match(record, match, score=max(score, match.score)))
+            if len(records) >= limit:
+                break
+
+        if len(records) < limit:
+            self._append_fallback_matches(analysis, records, sources, limit)
         return records, sources
 
-    def _keyword_search(self, query: str, limit: int) -> list[dict]:
-        tokens = self._tokens(query)
-        filters = self._query_filters(query)
+    def _keyword_search(self, analysis: QueryAnalysis, limit: int) -> list[dict]:
         scored: list[dict] = []
         for record in self.graph_data.get_records():
-            if not self._matches_filters(record, filters):
+            match = match_record(record, analysis)
+            if not match:
                 continue
-            haystack = " ".join(
-                [
-                    record.name,
-                    record.category,
-                    record.difficulty,
-                    record.description,
-                    " ".join(item.name for item in record.ingredients),
-                    " ".join(record.steps[:6]),
-                ]
+            scored.append(
+                {
+                    "recipe_id": record.id,
+                    "recipe_name": record.name,
+                    "score": match.score,
+                    "matched_terms": list(match.matched_terms),
+                    "reason": match.reason,
+                }
             )
-            score = self._keyword_score(tokens, haystack)
-            if score > 0:
-                scored.append(
-                    {
-                        "recipe_id": record.id,
-                        "recipe_name": record.name,
-                        "score": score,
-                    }
-                )
         scored.sort(key=lambda item: item["score"], reverse=True)
         return scored[:limit]
 
-    def _query_filters(self, query: str) -> dict[str, str]:
-        filters: dict[str, str] = {}
-        for category in ("荤菜", "素菜", "汤品", "甜品", "早餐", "主食", "水产", "调料", "饮品", "半成品"):
-            if category in query:
-                filters["category"] = category
-                break
-        for difficulty in ("非常简单", "简单", "中等", "困难", "非常困难"):
-            if difficulty in query:
-                filters["difficulty"] = difficulty
-                break
-        return filters
-
-    def _matches_filters(self, record: RecipeRecord, filters: dict[str, str]) -> bool:
-        if filters.get("category") and record.category != filters["category"]:
-            return False
-        if filters.get("difficulty") and record.difficulty not in (filters["difficulty"], "未知"):
-            return False
-        return True
-
-    def _tokens(self, query: str) -> list[str]:
-        labels = [
-            "荤菜",
-            "素菜",
-            "汤品",
-            "甜品",
-            "早餐",
-            "主食",
-            "水产",
-            "调料",
-            "饮品",
-            "半成品",
-            "非常简单",
-            "简单",
-            "中等",
-            "困难",
-        ]
-        tokens = [label for label in labels if label in query]
-        tokens.extend(re.findall(r"[a-zA-Z0-9]+", query))
-        tokens.extend(re.findall(r"[\u4e00-\u9fff]{1,2}", query))
-        return list(dict.fromkeys(token for token in tokens if token.strip()))
-
-    def _keyword_score(self, tokens: list[str], text: str) -> float:
-        score = 0.0
-        for token in tokens:
-            if token in text:
-                score += 1.0 + math.log1p(text.count(token))
-        return score
-
-    def _rrf(self, vector_hits: list[dict], keyword_hits: list[dict], k: int = 60) -> list[tuple[str, float]]:
+    def _rank(self, vector_hits: list[dict], keyword_hits: list[dict], k: int = 60) -> list[tuple[str, float]]:
         scores: dict[str, float] = defaultdict(float)
         for rank, hit in enumerate(vector_hits):
             if hit.get("recipe_id"):
-                scores[hit["recipe_id"]] += 1.0 / (k + rank + 1)
+                scores[hit["recipe_id"]] += 10.0 / (k + rank + 1)
         for rank, hit in enumerate(keyword_hits):
             if hit.get("recipe_id"):
-                scores[hit["recipe_id"]] += 1.0 / (k + rank + 1)
+                scores[hit["recipe_id"]] += float(hit.get("score", 0)) + 10.0 / (k + rank + 1)
         return sorted(scores.items(), key=lambda item: item[1], reverse=True)
+
+    def _append_fallback_matches(
+        self,
+        analysis: QueryAnalysis,
+        records: list[RecipeRecord],
+        sources: list[Source],
+        limit: int,
+    ) -> None:
+        seen = {record.id for record in records}
+        matches: list[tuple[float, RecipeRecord]] = []
+        for record in self.graph_data.get_records():
+            if record.id in seen:
+                continue
+            match = match_record(record, analysis)
+            if match:
+                matches.append((match.score, record))
+        matches.sort(key=lambda item: item[0], reverse=True)
+        for score, record in matches:
+            match = match_record(record, analysis)
+            if not match:
+                continue
+            records.append(record)
+            sources.append(source_from_match(record, match, score=score))
+            if len(records) >= limit:
+                break
