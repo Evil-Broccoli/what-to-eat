@@ -63,14 +63,20 @@ class RagService:
         indexed = self.milvus_index.rebuild(chunks)
         self.last_build = datetime.now(timezone.utc).isoformat()
         status = self.health()
+        payload = status.model_dump()
+        payload["chunk_count"] = indexed or len(chunks)
         return RebuildResponse(
-            **status.model_dump(),
-            chunk_count=indexed or len(chunks),
+            **payload,
             message="索引重建完成；不可用的外部服务已使用本地 Markdown 兜底。" if failed or not indexed else "索引重建完成。",
             failed_sources=failed,
         )
 
     def chat(self, query: str) -> ChatResponse:
+        records, sources, strategy = self.retrieve(query)
+        answer = self.generator.generate(query, records, strategy)
+        return ChatResponse(answer=answer, strategy=strategy, sources=sources)
+
+    def retrieve(self, query: str):
         analysis = self.router.analyze(query)
         try:
             if analysis.strategy == "graph_rag":
@@ -84,15 +90,16 @@ class RagService:
                 records, sources = self.hybrid.search(query, limit=settings.top_k)
         except Exception:
             records, sources = self.hybrid.search(query, limit=settings.top_k)
-            analysis = self.router.analyze("推荐")
+            return records, sources, "hybrid"
 
-        answer = self.generator.generate(query, records, analysis.strategy)
-        return ChatResponse(answer=answer, strategy=analysis.strategy, sources=sources)
+        return records, sources, analysis.strategy
 
     def stream_chat(self, query: str):
-        response = self.chat(query)
-        for token in self.generator.stream(query, self._records_from_sources(response.sources), response.strategy):
-            yield token
+        records, _, strategy = self.retrieve(query)
+        yield from self.stream_answer(query, records, strategy)
+
+    def stream_answer(self, query: str, records, strategy: str):
+        yield from self.generator.stream(query, records, strategy)
 
     def list_recipes(
         self,

@@ -1,12 +1,12 @@
 # what-to-eat
 
-一个菜谱 Graph RAG Web 应用。当前版本将原命令行 RAG 改造成前后端分离架构：
+一个菜谱 Graph RAG Web 应用。
 
 - 后端：FastAPI，提供问答、菜谱浏览、索引状态和重建接口。
 - 前端：Next.js，提供菜谱问答、菜谱列表、菜谱详情和系统状态页面。
 - 数据层：Neo4j + Milvus 通过 Docker Compose 本地运行。
-- 数据源：继续复用 `cook/` 目录下的 Markdown 菜谱库。
-- 模型：LLM 和 Embedding 都通过 OpenAI-compatible API 配置，便于服务器部署。
+- 数据源：食谱来自 https://github.com/Anduin2017/HowToCook 。
+- 模型：LLM 和 Embedding 通过 OpenAI-compatible API 配置。
 
 ## 本地启动
 
@@ -62,6 +62,15 @@ npm run dev
 ```
 
 访问 `http://localhost:3000`。
+
+## 本地演示检查
+
+1. 打开 `http://localhost:3000/status`，确认后端状态可以读取。
+2. 点击“重建索引”，等待页面显示最近重建结果。
+3. 打开 `http://localhost:3000/chat`，输入“推荐几个简单的素菜”。
+4. 确认回答会流式出现，并在右侧显示检索策略和引用菜谱。
+
+如果 Milvus 未启动，系统会退回本地 Markdown 检索；如果 Neo4j 未启动，图谱同步会跳过但不影响基础问答演示。
 
 ## API
 
