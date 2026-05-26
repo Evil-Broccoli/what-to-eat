@@ -321,6 +321,17 @@ textarea {
   gap: 8px;
 }
 
+.noticeList {
+  display: grid;
+  gap: 8px;
+}
+
+.noticeList p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 @media (max-width: 860px) {
   .appShell {
     grid-template-columns: 1fr;

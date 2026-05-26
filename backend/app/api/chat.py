@@ -23,11 +23,8 @@ def stream_chat(request: ChatRequest):
 
     def event_stream():
         try:
-            records, sources, strategy = rag_service.retrieve(request.query)
-            yield sse("meta", {"strategy": strategy, "sources": [item.model_dump() for item in sources]})
-            for token in rag_service.stream_answer(request.query, records, strategy):
-                yield sse("token", {"content": token})
-            yield sse("done", {})
+            for event, payload in rag_service.stream_chat(request.query):
+                yield sse(event, payload)
         except Exception as exc:
             yield sse("error", {"message": f"问答生成失败：{exc}"})
             yield sse("done", {})

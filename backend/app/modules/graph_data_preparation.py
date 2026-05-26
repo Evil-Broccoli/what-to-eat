@@ -121,7 +121,7 @@ class GraphDataPreparationModule:
         records = records or self.records
         failed: list[str] = []
         if not self.is_neo4j_available:
-            return [record.source for record in records]
+            return ["Neo4j 未连接，已跳过图谱同步并使用本地 Markdown 数据"]
 
         with self.driver.session() as session:
             self._ensure_constraints(session)

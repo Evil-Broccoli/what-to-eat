@@ -53,6 +53,30 @@ class MilvusIndexConstructionModule:
             return False
 
     @property
+    def is_embedding_configured(self) -> bool:
+        return self._can_embed()
+
+    def fallback_reason(self) -> str | None:
+        if OpenAI is None:
+            return "openai 包未安装，无法调用 Embedding API，已使用本地检索兜底"
+        if not self.api_key:
+            return "Embedding API Key 未配置，已使用本地检索兜底"
+        if Collection is None:
+            return "pymilvus 未安装，已使用本地检索兜底"
+        if not self._can_connect_port():
+            return "Milvus 未连接，已使用本地检索兜底"
+        try:
+            collection = self.collection
+            if not self._collection_matches_dimension(collection):
+                return (
+                    f"Milvus 索引维度与 EMBEDDING_DIMENSION={self.dimension} 不一致，"
+                    "请重建索引或调整模型维度"
+                )
+        except Exception as exc:
+            return f"Milvus 不可用：{exc}"
+        return None
+
+    @property
     def client(self):
         if OpenAI is None:
             raise RuntimeError("openai package is not installed")

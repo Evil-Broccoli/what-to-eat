@@ -53,6 +53,8 @@ cd backend
 python scripts/rebuild_index.py
 ```
 
+也可以先启动前端后，在 `http://localhost:3000/status` 点击“重建索引”。状态页会显示 Neo4j、Milvus、LLM、Embedding 的配置/连接情况，以及当前是否使用本地兜底。
+
 5. 启动前端：
 
 ```bash
@@ -71,6 +73,7 @@ npm run dev
 4. 确认回答会流式出现，并在右侧显示检索策略和引用菜谱。
 
 如果 Milvus 未启动，系统会退回本地 Markdown 检索；如果 Neo4j 未启动，图谱同步会跳过但不影响基础问答演示。
+如果未配置 `OPENAI_API_KEY`，问答仍会基于检索结果生成模板回答；配置 LLM 后会自动走流式模型输出。
 
 ## API
 

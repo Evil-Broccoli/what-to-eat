@@ -48,12 +48,21 @@ class RagService:
     def health(self) -> IndexStatus:
         records = self.graph_data.get_records()
         chunks = self.graph_data.build_chunks(records)
+        neo4j_available = self.graph_data.is_neo4j_available
+        milvus_available = self.milvus_index.is_available
+        degraded_services = self._degraded_services(neo4j_available, milvus_available)
         return IndexStatus(
-            neo4j=self.graph_data.is_neo4j_available,
-            milvus=self.milvus_index.is_available,
+            neo4j=neo4j_available,
+            milvus=milvus_available,
             recipe_count=len(records),
-            chunk_count=self.milvus_index.count() or len(chunks),
+            chunk_count=self.milvus_index.count() if milvus_available else len(chunks),
             last_build=self.last_build,
+            llm_configured=self.generator.is_configured,
+            llm_model=self.generator.model_name,
+            embedding_configured=self.milvus_index.is_embedding_configured,
+            embedding_model=self.milvus_index.model_name,
+            embedding_dimension=self.milvus_index.dimension,
+            degraded_services=degraded_services,
         )
 
     def rebuild(self) -> RebuildResponse:
@@ -61,6 +70,10 @@ class RagService:
         failed = self.graph_data.sync_to_neo4j(records)
         chunks = self.graph_data.build_chunks(records)
         indexed = self.milvus_index.rebuild(chunks)
+        if not indexed and chunks:
+            reason = self.milvus_index.fallback_reason()
+            if reason:
+                failed.append(reason)
         self.last_build = datetime.now(timezone.utc).isoformat()
         status = self.health()
         payload = status.model_dump()
@@ -95,8 +108,11 @@ class RagService:
         return records, sources, analysis.strategy
 
     def stream_chat(self, query: str):
-        records, _, strategy = self.retrieve(query)
-        yield from self.stream_answer(query, records, strategy)
+        records, sources, strategy = self.retrieve(query)
+        yield "meta", {"strategy": strategy, "sources": [item.model_dump() for item in sources]}
+        for token in self.stream_answer(query, records, strategy):
+            yield "token", {"content": token}
+        yield "done", {}
 
     def stream_answer(self, query: str, records, strategy: str):
         yield from self.generator.stream(query, records, strategy)
@@ -154,6 +170,18 @@ class RagService:
             seen.add(source.recipe_id)
             result.append(source)
         return result
+
+    def _degraded_services(self, neo4j_available: bool, milvus_available: bool) -> list[str]:
+        messages: list[str] = []
+        if not neo4j_available:
+            messages.append("Neo4j 未连接，图谱同步和图遍历会使用本地 Markdown 兜底")
+        if not milvus_available:
+            reason = self.milvus_index.fallback_reason()
+            messages.append(reason or "Milvus 不可用，向量检索会使用本地关键词兜底")
+        llm_reason = self.generator.fallback_reason
+        if llm_reason:
+            messages.append(llm_reason)
+        return list(dict.fromkeys(messages))
 
 
 rag_service = RagService()

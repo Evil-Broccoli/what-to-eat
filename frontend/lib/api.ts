@@ -59,12 +59,18 @@ export type IndexStatus = {
   recipe_count: number;
   chunk_count: number;
   last_build?: string | null;
+  llm_configured: boolean;
+  llm_model?: string | null;
+  embedding_configured: boolean;
+  embedding_model?: string | null;
+  embedding_dimension?: number | null;
+  degraded_services: string[];
 };
 
 export async function apiGet<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, { cache: "no-store" });
   if (!response.ok) {
-    throw new Error(`API request failed: ${response.status}`);
+    throw new Error(await responseErrorMessage(response, "API 请求失败"));
   }
   return response.json();
 }
@@ -76,7 +82,7 @@ export async function chat(query: string): Promise<ChatResponse> {
     body: JSON.stringify({ query }),
   });
   if (!response.ok) {
-    throw new Error(`Chat failed: ${response.status}`);
+    throw new Error(await responseErrorMessage(response, "问答请求失败"));
   }
   return response.json();
 }
@@ -88,7 +94,7 @@ export async function streamChat(query: string, handlers: StreamChatHandlers): P
     body: JSON.stringify({ query, stream: true }),
   });
   if (!response.ok) {
-    throw new Error(`Chat stream failed: ${response.status}`);
+    throw new Error(await responseErrorMessage(response, "流式问答请求失败"));
   }
   if (!response.body) {
     throw new Error("Chat stream is not readable");
@@ -112,9 +118,37 @@ export async function streamChat(query: string, handlers: StreamChatHandlers): P
 export async function rebuildIndex(): Promise<RebuildResponse> {
   const response = await fetch(`${API_BASE_URL}/index/rebuild`, { method: "POST" });
   if (!response.ok) {
-    throw new Error(`Index rebuild failed: ${response.status}`);
+    throw new Error(await responseErrorMessage(response, "索引重建失败"));
   }
   return response.json();
+}
+
+async function responseErrorMessage(response: Response, fallback: string): Promise<string> {
+  const text = await response.text();
+  if (!text) return `${fallback}: ${response.status}`;
+
+  try {
+    const payload = JSON.parse(text) as { detail?: unknown; message?: unknown };
+    if (typeof payload.detail === "string") {
+      return payload.detail;
+    }
+    if (Array.isArray(payload.detail)) {
+      return payload.detail
+        .map((item: unknown) =>
+          typeof item === "object" && item !== null && "msg" in item
+            ? String((item as { msg?: unknown }).msg)
+            : JSON.stringify(item),
+        )
+        .join("；");
+    }
+    if (typeof payload.message === "string") {
+      return payload.message;
+    }
+  } catch {
+    return text;
+  }
+
+  return `${fallback}: ${response.status}`;
 }
 
 function readSseBuffer(buffer: string, handlers: StreamChatHandlers): string {
