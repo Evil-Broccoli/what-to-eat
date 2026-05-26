@@ -77,32 +77,36 @@ class MilvusIndexConstructionModule:
     def rebuild(self, chunks: list[dict[str, Any]]) -> int:
         if Collection is None or not self._can_embed() or not self._can_connect_port():
             return 0
-        connections.connect(alias="default", host=self.host, port=self.port)
-        if utility.has_collection(self.collection_name):
-            utility.drop_collection(self.collection_name)
-            self._collection = None
-        collection = self.collection
         if not chunks:
             return 0
 
-        vectors = self.embed([chunk["text"] for chunk in chunks])
-        collection.insert(
-            [
-                [chunk["id"] for chunk in chunks],
-                [chunk["recipe_id"] for chunk in chunks],
-                [chunk["chunk_id"] for chunk in chunks],
-                [chunk["chunk_type"] for chunk in chunks],
-                [chunk["recipe_name"] for chunk in chunks],
-                [chunk["category"] for chunk in chunks],
-                [chunk["difficulty"] for chunk in chunks],
-                [chunk["text"][:8000] for chunk in chunks],
-                [str(chunk["metadata"]) for chunk in chunks],
-                vectors,
-            ]
-        )
-        collection.flush()
-        collection.load()
-        return len(chunks)
+        try:
+            vectors = self.embed([chunk["text"] for chunk in chunks])
+            connections.connect(alias="default", host=self.host, port=self.port)
+            if utility.has_collection(self.collection_name):
+                utility.drop_collection(self.collection_name)
+                self._collection = None
+            collection = self.collection
+            collection.insert(
+                [
+                    [chunk["id"] for chunk in chunks],
+                    [chunk["recipe_id"] for chunk in chunks],
+                    [chunk["chunk_id"] for chunk in chunks],
+                    [chunk["chunk_type"] for chunk in chunks],
+                    [chunk["recipe_name"] for chunk in chunks],
+                    [chunk["category"] for chunk in chunks],
+                    [chunk["difficulty"] for chunk in chunks],
+                    [chunk["text"][:8000] for chunk in chunks],
+                    [str(chunk["metadata"]) for chunk in chunks],
+                    vectors,
+                ]
+            )
+            collection.flush()
+            collection.load()
+            return len(chunks)
+        except Exception as exc:
+            logger.warning("Milvus index rebuild failed, keeping fallback retrieval: %s", exc)
+            return 0
 
     def search(self, query: str, limit: int = 8) -> list[dict[str, Any]]:
         if not self.is_available:
@@ -142,9 +146,12 @@ class MilvusIndexConstructionModule:
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         vectors: list[list[float]] = []
-        for start in range(0, len(texts), self.batch_size):
-            batch = texts[start : start + self.batch_size]
+        start = 0
+        while start < len(texts):
+            batch_size = max(1, self.batch_size)
+            batch = texts[start : start + batch_size]
             vectors.extend(self._embed_batch(batch))
+            start += len(batch)
         return vectors
 
     def _embed_batch(self, texts: list[str]) -> list[list[float]]:
@@ -155,7 +162,12 @@ class MilvusIndexConstructionModule:
         try:
             response = self.client.embeddings.create(**payload)
         except Exception as exc:
-            if "dimension" not in str(exc).lower():
+            message = str(exc).lower()
+            if len(texts) > 1 and ("batch" in message or "input.contents" in message):
+                midpoint = max(1, len(texts) // 2)
+                self.batch_size = min(self.batch_size, midpoint)
+                return self._embed_batch(texts[:midpoint]) + self._embed_batch(texts[midpoint:])
+            if "dimension" not in message:
                 raise
             payload.pop("dimensions", None)
             response = self.client.embeddings.create(**payload)

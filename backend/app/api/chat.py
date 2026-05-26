@@ -18,11 +18,18 @@ def chat(request: ChatRequest):
 
 @router.post("/stream")
 def stream_chat(request: ChatRequest):
+    def sse(event: str, payload: dict):
+        return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
     def event_stream():
-        response = rag_service.chat(request.query)
-        yield f"event: meta\ndata: {json.dumps({'strategy': response.strategy, 'sources': [item.model_dump() for item in response.sources]}, ensure_ascii=False)}\n\n"
-        for char in response.answer:
-            yield f"event: token\ndata: {json.dumps({'content': char}, ensure_ascii=False)}\n\n"
-        yield "event: done\ndata: {}\n\n"
+        try:
+            records, sources, strategy = rag_service.retrieve(request.query)
+            yield sse("meta", {"strategy": strategy, "sources": [item.model_dump() for item in sources]})
+            for token in rag_service.stream_answer(request.query, records, strategy):
+                yield sse("token", {"content": token})
+            yield sse("done", {})
+        except Exception as exc:
+            yield sse("error", {"message": f"问答生成失败：{exc}"})
+            yield sse("done", {})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

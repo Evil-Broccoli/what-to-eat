@@ -1,43 +1,107 @@
 "use client";
 
 import Link from "next/link";
-import { SendHorizontal } from "lucide-react";
+import { RotateCcw, SendHorizontal } from "lucide-react";
 import { FormEvent, useState } from "react";
 
-import { ChatResponse, Source, chat } from "@/lib/api";
+import { Source, streamChat } from "@/lib/api";
 
 type Message = {
+  id: number;
   role: "user" | "assistant";
   content: string;
 };
 
+const initialMessage: Message = {
+  id: 1,
+  role: "assistant",
+  content: "告诉我你想吃什么、手边有什么食材，或者直接问某道菜怎么做。",
+};
+
 export function ChatWorkspace() {
   const [query, setQuery] = useState("推荐几个简单的素菜");
-  const [messages, setMessages] = useState<Message[]>([
-    { role: "assistant", content: "告诉我你想吃什么、手边有什么食材，或者直接问某道菜怎么做。" },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([initialMessage]);
   const [sources, setSources] = useState<Source[]>([]);
   const [strategy, setStrategy] = useState<string>("hybrid");
   const [loading, setLoading] = useState(false);
+  const [activeAssistantId, setActiveAssistantId] = useState<number | null>(null);
+  const [lastQuery, setLastQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  async function onSubmit(event: FormEvent) {
-    event.preventDefault();
-    const trimmed = query.trim();
+  async function submitQuery(text: string) {
+    const trimmed = text.trim();
     if (!trimmed || loading) return;
+
+    const userId = Date.now();
+    const assistantId = userId + 1;
+    let receivedToken = false;
+
     setLoading(true);
+    setActiveAssistantId(assistantId);
+    setLastQuery(trimmed);
     setError(null);
-    setMessages((items) => [...items, { role: "user", content: trimmed }]);
+    setSources([]);
+    setMessages((items) => [
+      ...items,
+      { id: userId, role: "user", content: trimmed },
+      { id: assistantId, role: "assistant", content: "" },
+    ]);
     setQuery("");
+
     try {
-      const response: ChatResponse = await chat(trimmed);
-      setStrategy(response.strategy);
-      setSources(response.sources);
-      setMessages((items) => [...items, { role: "assistant", content: response.answer }]);
+      await streamChat(trimmed, {
+        onMeta: (meta) => {
+          setStrategy(meta.strategy);
+          setSources(meta.sources);
+        },
+        onToken: (content) => {
+          if (!content) return;
+          receivedToken = true;
+          setMessages((items) =>
+            items.map((message) =>
+              message.id === assistantId ? { ...message, content: message.content + content } : message,
+            ),
+          );
+        },
+        onError: (message) => {
+          setError(message);
+          setMessages((items) =>
+            items.map((item) =>
+              item.id === assistantId && !item.content ? { ...item, content: message } : item,
+            ),
+          );
+        },
+      });
+
+      if (!receivedToken) {
+        setMessages((items) =>
+          items.map((item) =>
+            item.id === assistantId && !item.content
+              ? { ...item, content: "没有收到生成内容，请稍后重试。" }
+              : item,
+          ),
+        );
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "请求失败");
+      const message = err instanceof Error ? err.message : "请求失败";
+      setError(message);
+      setMessages((items) =>
+        items.map((item) => (item.id === assistantId ? { ...item, content: message } : item)),
+      );
     } finally {
       setLoading(false);
+      setActiveAssistantId(null);
+    }
+  }
+
+  function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    void submitQuery(query);
+  }
+
+  function retryLastQuery() {
+    if (lastQuery) {
+      void submitQuery(lastQuery);
     }
   }
 
@@ -45,12 +109,22 @@ export function ChatWorkspace() {
     <div className="chatGrid">
       <section className="panel chatPanel">
         <div className="messages">
-          {messages.map((message, index) => (
-            <div className={`message ${message.role}`} key={`${message.role}-${index}`}>
-              {message.content}
+          {messages.map((message) => (
+            <div className={`message ${message.role}`} key={message.id}>
+              {message.content || (message.id === activeAssistantId ? "正在生成..." : "")}
             </div>
           ))}
-          {error ? <div className="message assistant errorText">{error}</div> : null}
+          {error ? (
+            <div className="message assistant errorText">
+              <span>{error}</span>
+              {lastQuery ? (
+                <button className="textButton" type="button" onClick={retryLastQuery} disabled={loading}>
+                  <RotateCcw size={16} />
+                  重试
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <form className="composer" onSubmit={onSubmit}>
           <textarea
@@ -58,7 +132,7 @@ export function ChatWorkspace() {
             onChange={(event) => setQuery(event.target.value)}
             placeholder="例如：我有鸡蛋和土豆，能做什么？"
           />
-          <button className="iconButton" type="submit" disabled={loading} title="发送">
+          <button className="iconButton" type="submit" disabled={loading} title="发送" aria-label="发送">
             <SendHorizontal size={20} />
           </button>
         </form>

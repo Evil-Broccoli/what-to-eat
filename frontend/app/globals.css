@@ -184,9 +184,25 @@ textarea {
   background: var(--accent-strong);
 }
 
-.primaryButton:disabled {
+.primaryButton:disabled,
+.iconButton:disabled,
+.textButton:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.textButton {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--accent-strong);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  min-height: 34px;
+  padding: 0 10px;
+  cursor: pointer;
 }
 
 .sideStack {
@@ -279,6 +295,32 @@ textarea {
   color: var(--warn);
 }
 
+.statusToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 18px 20px;
+}
+
+.statusToolbar h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+
+.statusToolbar p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.failedSources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 @media (max-width: 860px) {
   .appShell {
     grid-template-columns: 1fr;
@@ -306,5 +348,10 @@ textarea {
 
   .filters {
     grid-template-columns: 1fr;
+  }
+
+  .statusToolbar {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

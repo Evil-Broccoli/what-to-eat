@@ -52,12 +52,44 @@ class GenerationIntegrationModule:
         if not records:
             return "抱歉，暂时没有找到匹配的菜谱。可以换一个菜名、食材或条件再试。"
 
-        llm = self.llm
-        context = self._context(records)
-        if llm and ChatPromptTemplate and StrOutputParser:
+        chain = self._chain()
+        if chain:
             try:
-                prompt = ChatPromptTemplate.from_template(
-                    """
+                return chain.invoke(self._payload(query, records, strategy))
+            except Exception as exc:
+                logger.warning("LLM generation failed, using fallback: %s", exc)
+        return self._fallback_answer(query, records)
+
+    def stream(self, query: str, records: list[RecipeRecord], strategy: str):
+        if not records:
+            yield "抱歉，暂时没有找到匹配的菜谱。可以换一个菜名、食材或条件再试。"
+            return
+
+        chain = self._chain()
+        if chain:
+            try:
+                for chunk in chain.stream(self._payload(query, records, strategy)):
+                    if chunk:
+                        yield str(chunk)
+                return
+            except Exception as exc:
+                logger.warning("LLM streaming failed, using fallback: %s", exc)
+
+        for char in self._fallback_answer(query, records):
+            yield char
+
+    def _chain(self):
+        llm = self.llm
+        if not llm or not ChatPromptTemplate or not StrOutputParser:
+            return None
+        return self._prompt() | llm | StrOutputParser()
+
+    def _payload(self, query: str, records: list[RecipeRecord], strategy: str) -> dict[str, str]:
+        return {"query": query, "strategy": strategy, "context": self._context(records)}
+
+    def _prompt(self):
+        return ChatPromptTemplate.from_template(
+            """
 你是一个专业、实用的中文烹饪助手。请基于给定菜谱资料回答用户问题。
 
 用户问题：{query}
@@ -73,17 +105,7 @@ class GenerationIntegrationModule:
 
 回答：
 """
-                )
-                chain = prompt | llm | StrOutputParser()
-                return chain.invoke({"query": query, "strategy": strategy, "context": context})
-            except Exception as exc:
-                logger.warning("LLM generation failed, using fallback: %s", exc)
-        return self._fallback_answer(query, records)
-
-    def stream(self, query: str, records: list[RecipeRecord], strategy: str):
-        answer = self.generate(query, records, strategy)
-        for char in answer:
-            yield char
+        )
 
     def _context(self, records: list[RecipeRecord]) -> str:
         parts: list[str] = []

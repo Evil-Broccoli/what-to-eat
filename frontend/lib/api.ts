@@ -14,6 +14,18 @@ export type ChatResponse = {
   sources: Source[];
 };
 
+export type RebuildResponse = IndexStatus & {
+  message: string;
+  failed_sources: string[];
+};
+
+export type StreamChatHandlers = {
+  onMeta?: (meta: Pick<ChatResponse, "strategy" | "sources">) => void;
+  onToken?: (content: string) => void;
+  onError?: (message: string) => void;
+  onDone?: () => void;
+};
+
 export type RecipeSummary = {
   id: string;
   name: string;
@@ -67,4 +79,78 @@ export async function chat(query: string): Promise<ChatResponse> {
     throw new Error(`Chat failed: ${response.status}`);
   }
   return response.json();
+}
+
+export async function streamChat(query: string, handlers: StreamChatHandlers): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/chat/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, stream: true }),
+  });
+  if (!response.ok) {
+    throw new Error(`Chat stream failed: ${response.status}`);
+  }
+  if (!response.body) {
+    throw new Error("Chat stream is not readable");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    buffer = readSseBuffer(buffer, handlers);
+  }
+
+  buffer += decoder.decode();
+  readSseBuffer(`${buffer}\n\n`, handlers);
+}
+
+export async function rebuildIndex(): Promise<RebuildResponse> {
+  const response = await fetch(`${API_BASE_URL}/index/rebuild`, { method: "POST" });
+  if (!response.ok) {
+    throw new Error(`Index rebuild failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+function readSseBuffer(buffer: string, handlers: StreamChatHandlers): string {
+  let normalized = buffer.replace(/\r\n/g, "\n");
+  let boundary = normalized.indexOf("\n\n");
+  while (boundary >= 0) {
+    const rawEvent = normalized.slice(0, boundary);
+    normalized = normalized.slice(boundary + 2);
+    dispatchSseEvent(rawEvent, handlers);
+    boundary = normalized.indexOf("\n\n");
+  }
+  return normalized;
+}
+
+function dispatchSseEvent(rawEvent: string, handlers: StreamChatHandlers) {
+  if (!rawEvent.trim()) return;
+
+  let eventName = "message";
+  const dataLines: string[] = [];
+  for (const line of rawEvent.split("\n")) {
+    if (line.startsWith("event:")) {
+      eventName = line.slice(6).trim();
+    } else if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  }
+
+  const data = dataLines.join("\n");
+  const payload = data ? JSON.parse(data) : {};
+  if (eventName === "meta") {
+    handlers.onMeta?.(payload as Pick<ChatResponse, "strategy" | "sources">);
+  } else if (eventName === "token") {
+    handlers.onToken?.(String(payload.content ?? ""));
+  } else if (eventName === "error") {
+    handlers.onError?.(String(payload.message ?? "问答生成失败"));
+  } else if (eventName === "done") {
+    handlers.onDone?.();
+  }
 }

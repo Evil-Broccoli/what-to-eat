@@ -40,7 +40,7 @@ class Settings:
     embedding_base_url: str | None = os.getenv("EMBEDDING_BASE_URL") or os.getenv("OPENAI_BASE_URL") or None
     embedding_model: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
     embedding_dimension: int = int(os.getenv("EMBEDDING_DIMENSION", "1536"))
-    embedding_batch_size: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "64"))
+    embedding_batch_size: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "10"))
     cors_origins: tuple[str, ...] = tuple(
         origin.strip()
         for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
