@@ -36,6 +36,7 @@ frontend/qa-*.png
 
 # Local agent planning notes
 agents.md
+.tmp-docker-config/
 
 # PyInstaller
 #   Usually these files are written by a python script from a template

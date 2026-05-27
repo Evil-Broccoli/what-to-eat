@@ -1,4 +1,11 @@
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000/api";
+const publicApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
+const internalApiBaseUrl = process.env.INTERNAL_API_BASE_URL ?? "http://127.0.0.1:8000/api";
+
+function apiUrl(path: string): string {
+  const baseUrl =
+    typeof window === "undefined" && publicApiBaseUrl.startsWith("/") ? internalApiBaseUrl : publicApiBaseUrl;
+  return `${baseUrl.replace(/\/$/, "")}${path}`;
+}
 
 export type Source = {
   recipe_id: string;
@@ -70,7 +77,7 @@ export type IndexStatus = {
 };
 
 export async function apiGet<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, { cache: "no-store" });
+  const response = await fetch(apiUrl(path), { cache: "no-store" });
   if (!response.ok) {
     throw new Error(await responseErrorMessage(response, "API 请求失败"));
   }
@@ -78,7 +85,7 @@ export async function apiGet<T>(path: string): Promise<T> {
 }
 
 export async function chat(query: string): Promise<ChatResponse> {
-  const response = await fetch(`${API_BASE_URL}/chat`, {
+  const response = await fetch(apiUrl("/chat"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query }),
@@ -90,7 +97,7 @@ export async function chat(query: string): Promise<ChatResponse> {
 }
 
 export async function streamChat(query: string, handlers: StreamChatHandlers): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/chat/stream`, {
+  const response = await fetch(apiUrl("/chat/stream"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query, stream: true }),
@@ -118,7 +125,7 @@ export async function streamChat(query: string, handlers: StreamChatHandlers): P
 }
 
 export async function rebuildIndex(): Promise<RebuildResponse> {
-  const response = await fetch(`${API_BASE_URL}/index/rebuild`, { method: "POST" });
+  const response = await fetch(apiUrl("/index/rebuild"), { method: "POST" });
   if (!response.ok) {
     throw new Error(await responseErrorMessage(response, "索引重建失败"));
   }
